@@ -15,9 +15,12 @@ web server (geolocation requires http/https, not `file://`).
 |---|---|
 | `index.html` | The app: input, Leaflet map, verdict card |
 | `parser.js` | Coordinate parser (Maps URLs, decimal, DMS, DDM) |
-| `zones.js` | Generated zone data — do not edit by hand |
-| `build-zones.py` | Regenerates `zones.js` from the CAA KML |
+| `zones.js` | Generated CAA zone data — do not edit by hand |
+| `parks.js` | Generated national-park boundaries — do not edit by hand |
+| `build-zones.py` | Regenerates `zones.js` from the CAA KML (stdlib only) |
+| `build-parks.py` | Regenerates `parks.js` from 國家公園署 open data (needs pyshp/pyproj/shapely, see its docstring) |
 | `data/caa-rcr-total.kml` | Source: CAA「(總)限航區範圍」(Article a=1293) |
+| `data/parks-index.csv` | Source index: data.gov.tw dataset 174421 |
 | `test-parser.js` | Parser tests: `node test-parser.js` |
 
 ## Updating zone data
@@ -40,6 +43,8 @@ python3 build-zones.py
 - Airport circles (5 km red / 10 km yellow) are **approximations**; the law
   defines a specific polygon per airport.
 - **Not** included: county/city announced zones (published only as PDFs),
-  national parks, temporary NOTAMs.
-- CAA source KML last updated 2018/08/31.
+  temporary NOTAMs.
+- CAA source KML last updated 2018/08/31. Park boundaries are the latest
+  通盤檢討 layers published per park (vintages vary).
+- Outside Taiwan the tool gives no verdict (neutral gray), by design.
 - Always confirm on the official map: https://drone.caa.gov.tw/

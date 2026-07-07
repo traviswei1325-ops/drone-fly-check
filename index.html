@@ -81,6 +81,7 @@
   .verdict.red { background: #fdecec; border-color: #e8b4b4; color: #8f2020; }
   .verdict.yellow { background: #fdf6e3; border-color: #e8d49a; color: #7a5d0e; }
   .verdict.green { background: #ecf7ee; border-color: #b6dcbd; color: #1e6b2e; }
+  .verdict.gray { background: #f0f2f4; border-color: #cfd6dc; color: #4a5763; }
   .verdict .big { font-weight: 700; font-size: 1rem; }
   .verdict .note { font-size: 0.78rem; opacity: 0.85; margin-top: 4px; }
   #map { height: 380px; border-radius: 12px; border: 1px solid var(--border); }
@@ -124,9 +125,10 @@
   <div id="map"></div>
 
   <p class="disclaimer">
-    Verdict layers bundled: CAA restricted airspace (限航區, 2018 KML) + approximate airport
-    proximity circles. NOT included: county/city announced zones, national parks, temporary
-    NOTAMs (county zones are published only as PDFs — no machine-readable source yet). DJI GEO
+    Verdict layers bundled: CAA restricted airspace (限航區, 2018 KML), national park boundaries
+    (國家公園署 open data) + approximate airport proximity circles. NOT included: county/city
+    announced zones, temporary NOTAMs (county zones are published only as PDFs — no
+    machine-readable source yet). DJI GEO
     zones are separate from the law: a DJI drone may refuse takeoff even where flying is legal —
     use the DJI link to check. Reference only — always confirm on the official CAA map
     (drone.caa.gov.tw) before flying. Default legal ceiling: 400 ft AGL.
@@ -135,6 +137,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="zones.js"></script>
+<script src="parks.js"></script>
 <script src="parser.js"></script>
 <script>
   var map = L.map("map").setView([25.0330, 121.5654], 10); // default: Taipei
@@ -155,6 +158,11 @@
     onEachFeature: function (f, layer) { layer.bindPopup("限航區 " + f.properties.name); }
   }).addTo(map);
 
+  L.geoJSON(window.PARK_ZONES, {
+    style: { color: "#1e7a4f", weight: 1.5, fillColor: "#1e7a4f", fillOpacity: 0.15 },
+    onEachFeature: function (f, layer) { layer.bindPopup(f.properties.name + " — 禁用無人機（需公園管理處許可）"); }
+  }).addTo(map);
+
   window.AIRPORTS.forEach(function (a) {
     L.circle([a.lat, a.lng], {
       radius: AIRPORT_RED_KM * 1000,
@@ -173,8 +181,8 @@
     return inside;
   }
 
-  function zoneHit(lat, lng) {
-    var fs = window.CAA_ZONES.features;
+  function zoneHit(lat, lng, collection) {
+    var fs = collection.features;
     for (var i = 0; i < fs.length; i++) {
       var rings = fs[i].geometry.coordinates;
       if (pointInRing(lat, lng, rings[0])) {
@@ -206,15 +214,31 @@
     return best;
   }
 
+  // Taiwan + outlying islands (Kinmen/Matsu/Penghu); Dongsha & Spratly zones
+  // are checked against their polygons before this guard applies.
+  function inTaiwanArea(lat, lng) {
+    return lat >= 20 && lat <= 26.7 && lng >= 116 && lng <= 123.5;
+  }
+
   function renderVerdict(lat, lng) {
     var el = document.getElementById("verdict");
-    var zone = zoneHit(lat, lng);
+    var zone = zoneHit(lat, lng, window.CAA_ZONES);
+    var park = zoneHit(lat, lng, window.PARK_ZONES);
     var ap = nearestAirport(lat, lng);
-    var confirmNote = '<div class="note">Confirm on the official CAA map — county zones, parks and NOTAMs are not bundled here.</div>';
+    var confirmNote = '<div class="note">Confirm on the official CAA map — county zones and NOTAMs are not bundled here.</div>';
     if (zone) {
       el.className = "verdict red";
       el.innerHTML = '<span class="big">🔴 Restricted airspace: ' + zone + "</span><br>" +
         "Inside a CAA 限航區 — no drone flight without CAA approval." + confirmNote;
+    } else if (park) {
+      el.className = "verdict red";
+      el.innerHTML = '<span class="big">🔴 National park: ' + park + "</span><br>" +
+        "Drones are banned in national parks without a permit from the park authority (國家公園法)." + confirmNote;
+    } else if (!inTaiwanArea(lat, lng)) {
+      el.className = "verdict gray";
+      el.innerHTML = '<span class="big">⚪ Outside Taiwan</span><br>' +
+        "This tool's data covers Taiwan only — no verdict here. Use the DJI GEO link below and check local regulations.";
+      return;
     } else if (ap && ap.km <= AIRPORT_RED_KM) {
       el.className = "verdict red";
       el.innerHTML = '<span class="big">🔴 Airport vicinity</span><br>' +
