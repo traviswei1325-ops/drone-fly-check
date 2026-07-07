@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drone Fly Check — Coordinate Parser</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --card: #ffffff;
+    --ink: #1c2733;
+    --muted: #5b6b7b;
+    --accent: #0b72d9;
+    --border: #dde4ea;
+    --err: #b23a3a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang TC", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.25rem; margin: 8px 0 2px; }
+  .sub { color: var(--muted); font-size: 0.85rem; margin: 0 0 14px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  textarea {
+    width: 100%;
+    min-height: 64px;
+    font: inherit;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    resize: vertical;
+  }
+  .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  button {
+    font: inherit;
+    padding: 9px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #fff;
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:active { transform: translateY(1px); }
+  .hint { color: var(--muted); font-size: 0.78rem; margin-top: 8px; line-height: 1.5; }
+  #result { display: none; }
+  #result.show { display: block; }
+  .coords { font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .fmt { color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
+  .links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .links a, .links button {
+    display: inline-block;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.85rem;
+  }
+  #error { display: none; color: var(--err); font-size: 0.88rem; margin-top: 10px; line-height: 1.5; }
+  #error.show { display: block; }
+  .verdict {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 0.92rem;
+    line-height: 1.5;
+    border: 1px solid;
+  }
+  .verdict.red { background: #fdecec; border-color: #e8b4b4; color: #8f2020; }
+  .verdict.yellow { background: #fdf6e3; border-color: #e8d49a; color: #7a5d0e; }
+  .verdict.green { background: #ecf7ee; border-color: #b6dcbd; color: #1e6b2e; }
+  .verdict .big { font-weight: 700; font-size: 1rem; }
+  .verdict .note { font-size: 0.78rem; opacity: 0.85; margin-top: 4px; }
+  #map { height: 380px; border-radius: 12px; border: 1px solid var(--border); }
+  .disclaimer {
+    color: var(--muted); font-size: 0.75rem; margin-top: 12px; line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🛸 Drone Fly Check</h1>
+  <p class="sub">Paste a location, get coordinates + a can-I-fly verdict (CAA restricted zones + airport proximity).</p>
+
+  <div class="card">
+    <textarea id="input" placeholder="Paste here: a Google Maps link, 25.0330 121.5654, 25°02'00&quot;N 121°33'55&quot;E, or 25 01.980N 121 33.924E"></textarea>
+    <div class="row">
+      <button class="primary" id="parseBtn">Parse</button>
+      <button id="locBtn">📍 Use my location</button>
+      <button id="clearBtn">Clear</button>
+    </div>
+    <div id="error"></div>
+    <div class="hint">
+      Tip: in the Google Maps app, long-press a spot → share → paste the link here.
+      If it's a short link (maps.app.goo.gl), open it in a browser first and copy the full URL.
+      You can also just tap the map below.
+    </div>
+  </div>
+
+  <div class="card" id="result">
+    <div class="coords" id="coordsText"></div>
+    <div class="fmt" id="fmtText"></div>
+    <div class="verdict" id="verdict"></div>
+    <div class="links">
+      <button id="copyBtn">Copy coordinates</button>
+      <a id="gmapsLink" target="_blank" rel="noopener">Open in Google Maps</a>
+      <a href="https://drone.caa.gov.tw/" target="_blank" rel="noopener">Check on CAA drone map ↗</a>
+      <a id="djiLink" target="_blank" rel="noopener">Check DJI GEO zone ↗</a>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <p class="disclaimer">
+    Verdict layers bundled: CAA restricted airspace (限航區, 2018 KML) + approximate airport
+    proximity circles. NOT included: county/city announced zones, national parks, temporary
+    NOTAMs (county zones are published only as PDFs — no machine-readable source yet). DJI GEO
+    zones are separate from the law: a DJI drone may refuse takeoff even where flying is legal —
+    use the DJI link to check. Reference only — always confirm on the official CAA map
+    (drone.caa.gov.tw) before flying. Default legal ceiling: 400 ft AGL.
+  </p>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="zones.js"></script>
+<script src="parser.js"></script>
+<script>
+  var map = L.map("map").setView([25.0330, 121.5654], 10); // default: Taipei
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap contributors"
+  }).addTo(map);
+
+  var marker = null;
+  var current = null;
+
+  // --- Zone layers ---
+  var AIRPORT_RED_KM = 5;    // approximate: the law defines per-airport polygons
+  var AIRPORT_YELLOW_KM = 10;
+
+  L.geoJSON(window.CAA_ZONES, {
+    style: { color: "#c0392b", weight: 1.5, fillColor: "#c0392b", fillOpacity: 0.18 },
+    onEachFeature: function (f, layer) { layer.bindPopup("限航區 " + f.properties.name); }
+  }).addTo(map);
+
+  window.AIRPORTS.forEach(function (a) {
+    L.circle([a.lat, a.lng], {
+      radius: AIRPORT_RED_KM * 1000,
+      color: "#d68910", weight: 1, fillColor: "#d68910", fillOpacity: 0.12
+    }).addTo(map).bindPopup(a.name + " — approx. " + AIRPORT_RED_KM + " km airport zone");
+  });
+
+  // --- Verdict helpers ---
+  function pointInRing(lat, lng, ring) {
+    var inside = false;
+    for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      var xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+      if ((yi > lat) !== (yj > lat) &&
+          lng < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  function zoneHit(lat, lng) {
+    var fs = window.CAA_ZONES.features;
+    for (var i = 0; i < fs.length; i++) {
+      var rings = fs[i].geometry.coordinates;
+      if (pointInRing(lat, lng, rings[0])) {
+        var inHole = false;
+        for (var h = 1; h < rings.length; h++) {
+          if (pointInRing(lat, lng, rings[h])) { inHole = true; break; }
+        }
+        if (!inHole) return fs[i].properties.name;
+      }
+    }
+    return null;
+  }
+
+  function haversineKm(lat1, lng1, lat2, lng2) {
+    var R = 6371, toRad = Math.PI / 180;
+    var dLat = (lat2 - lat1) * toRad, dLng = (lng2 - lng1) * toRad;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) *
+      Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * R * Math.asin(Math.sqrt(a));
+  }
+
+  function nearestAirport(lat, lng) {
+    var best = null;
+    window.AIRPORTS.forEach(function (a) {
+      var d = haversineKm(lat, lng, a.lat, a.lng);
+      if (!best || d < best.km) best = { name: a.name, km: d };
+    });
+    return best;
+  }
+
+  function renderVerdict(lat, lng) {
+    var el = document.getElementById("verdict");
+    var zone = zoneHit(lat, lng);
+    var ap = nearestAirport(lat, lng);
+    var confirmNote = '<div class="note">Confirm on the official CAA map — county zones, parks and NOTAMs are not bundled here.</div>';
+    if (zone) {
+      el.className = "verdict red";
+      el.innerHTML = '<span class="big">🔴 Restricted airspace: ' + zone + "</span><br>" +
+        "Inside a CAA 限航區 — no drone flight without CAA approval." + confirmNote;
+    } else if (ap && ap.km <= AIRPORT_RED_KM) {
+      el.className = "verdict red";
+      el.innerHTML = '<span class="big">🔴 Airport vicinity</span><br>' +
+        ap.km.toFixed(1) + " km from " + ap.name +
+        " — inside the typical airport no-fly range (approximate circle)." + confirmNote;
+    } else if (ap && ap.km <= AIRPORT_YELLOW_KM) {
+      el.className = "verdict yellow";
+      el.innerHTML = '<span class="big">🟡 Near an airport</span><br>' +
+        ap.km.toFixed(1) + " km from " + ap.name +
+        " — may fall inside its published no-fly polygon; verify before flying." + confirmNote;
+    } else {
+      el.className = "verdict green";
+      el.innerHTML = '<span class="big">🟢 No hit in bundled layers</span><br>' +
+        "Not in a CAA restricted zone; nearest airport is " + ap.name + " (" +
+        ap.km.toFixed(1) + " km). Keep under 400 ft AGL." + confirmNote;
+    }
+  }
+
+  function showPoint(lat, lng, format) {
+    current = { lat: lat, lng: lng };
+    if (marker) marker.setLatLng([lat, lng]);
+    else marker = L.marker([lat, lng]).addTo(map);
+    map.setView([lat, lng], Math.max(map.getZoom(), 15));
+
+    document.getElementById("coordsText").textContent = lat.toFixed(6) + ", " + lng.toFixed(6);
+    document.getElementById("fmtText").textContent = "Detected format: " + format;
+    document.getElementById("gmapsLink").href =
+      "https://www.google.com/maps?q=" + lat.toFixed(6) + "," + lng.toFixed(6);
+    document.getElementById("djiLink").href =
+      "https://fly-safe.dji.com/nfz/nfz-query?lat=" + lat.toFixed(6) + "&lng=" + lng.toFixed(6);
+    renderVerdict(lat, lng);
+    document.getElementById("result").classList.add("show");
+    hideError();
+  }
+
+  function showError(msg) {
+    var el = document.getElementById("error");
+    el.textContent = msg;
+    el.classList.add("show");
+  }
+  function hideError() {
+    document.getElementById("error").classList.remove("show");
+  }
+
+  function doParse() {
+    var text = document.getElementById("input").value;
+    var r = CoordParser.parse(text);
+    if (r.error) {
+      if (r.error !== "empty") showError(r.message);
+      return;
+    }
+    showPoint(r.lat, r.lng, r.format);
+  }
+
+  document.getElementById("parseBtn").addEventListener("click", doParse);
+  document.getElementById("input").addEventListener("paste", function () {
+    setTimeout(doParse, 50); // let the paste land first
+  });
+  document.getElementById("input").addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doParse(); }
+  });
+
+  document.getElementById("clearBtn").addEventListener("click", function () {
+    document.getElementById("input").value = "";
+    document.getElementById("result").classList.remove("show");
+    hideError();
+    if (marker) { map.removeLayer(marker); marker = null; }
+    current = null;
+  });
+
+  document.getElementById("locBtn").addEventListener("click", function () {
+    if (!navigator.geolocation) { showError("Geolocation not supported by this browser."); return; }
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        showPoint(pos.coords.latitude, pos.coords.longitude, "Device GPS (±" + Math.round(pos.coords.accuracy) + " m)");
+      },
+      function (err) {
+        showError("Couldn't get location: " + err.message +
+          (location.protocol === "file:" ? " (geolocation needs http(s) — serve the page, e.g. python3 -m http.server)" : ""));
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  });
+
+  map.on("click", function (e) {
+    showPoint(e.latlng.lat, e.latlng.lng, "Map click");
+  });
+
+  document.getElementById("copyBtn").addEventListener("click", function () {
+    if (!current) return;
+    var text = current.lat.toFixed(6) + ", " + current.lng.toFixed(6);
+    navigator.clipboard.writeText(text).then(function () {
+      var btn = document.getElementById("copyBtn");
+      btn.textContent = "Copied ✓";
+      setTimeout(function () { btn.textContent = "Copy coordinates"; }, 1500);
+    });
+  });
+</script>
+</body>
+</html>
