@@ -2,9 +2,12 @@
 
 Can-I-fly-here checker for drones in Taiwan. Paste a Google Maps link, GPS
 coordinates (decimal / DMS / degree-minutes), or tap the map — get a clean
-lat/lng plus a 🔴/🟡/🟢 verdict against CAA restricted airspace and airport
-proximity, with one-click confirmation links to the official CAA drone map
-and DJI GEO zone query.
+lat/lng plus a 🔴/🟡/🟢 verdict. Every check queries the official CAA
+drone-map ArcGIS server live (via JSONP — the server's CORS headers are
+broken), covering restricted airspace, per-airport/heliport polygons, county
+zones, and temporary airspace; bundled layers provide an offline estimate.
+One-click confirmation links to the official CAA drone map and DJI GEO
+zone query.
 
 **Pure static site** — no build step, no backend. Open `index.html` via any
 web server (geolocation requires http/https, not `file://`).
@@ -17,7 +20,9 @@ web server (geolocation requires http/https, not `file://`).
 | `parser.js` | Coordinate parser (Maps URLs, decimal, DMS, DDM) |
 | `zones.js` | Generated CAA zone data — do not edit by hand |
 | `parks.js` | Generated national-park boundaries — do not edit by hand |
+| `airports.js` | Generated official airport/heliport polygons — do not edit by hand |
 | `build-zones.py` | Regenerates `zones.js` from the CAA KML (stdlib only) |
+| `build-airports.py` | Regenerates `airports.js` from the CAA ArcGIS service (stdlib only) |
 | `build-parks.py` | Regenerates `parks.js` from 國家公園署 open data (needs pyshp/pyproj/shapely, see its docstring) |
 | `data/caa-rcr-total.kml` | Source: CAA「(總)限航區範圍」(Article a=1293) |
 | `data/parks-index.csv` | Source index: data.gov.tw dataset 174421 |
@@ -40,11 +45,12 @@ python3 build-zones.py
 
 ## Limitations — read before relying on it
 
-- Airport circles (5 km red / 10 km yellow) are **approximations**; the law
-  defines a specific polygon per airport.
-- **Not** included: county/city announced zones (published only as PDFs),
-  temporary NOTAMs.
-- CAA source KML last updated 2018/08/31. Park boundaries are the latest
-  通盤檢討 layers published per park (vintages vary).
+- The live check is authoritative-ish (it reads the same server as the
+  official map), but if it fails you get the bundled offline estimate,
+  which excludes county zones and temporary airspace — watch for the
+  "server unreachable" note.
+- Bundled CAA KML last updated 2018/08/31; park boundaries are the latest
+  通盤檢討 layers published per park (vintages vary); airport polygons are a
+  snapshot — re-run `build-airports.py` occasionally.
 - Outside Taiwan the tool gives no verdict (neutral gray), by design.
 - Always confirm on the official map: https://drone.caa.gov.tw/

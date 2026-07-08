@@ -93,7 +93,7 @@
 <body>
 <div class="wrap">
   <h1>🛸 Drone Fly Check</h1>
-  <p class="sub">Paste a location, get coordinates + a can-I-fly verdict (CAA restricted zones + airport proximity).</p>
+  <p class="sub">Paste a location, get coordinates + a live can-I-fly verdict from official CAA data.</p>
 
   <div class="card">
     <textarea id="input" placeholder="Paste here: a Google Maps link, 25.0330 121.5654, 25°02'00&quot;N 121°33'55&quot;E, or 25 01.980N 121 33.924E"></textarea>
@@ -125,10 +125,9 @@
   <div id="map"></div>
 
   <p class="disclaimer">
-    Verdict layers bundled: CAA restricted airspace (限航區, 2018 KML), national park boundaries
-    (國家公園署 open data) + approximate airport proximity circles. NOT included: county/city
-    announced zones, temporary NOTAMs (county zones are published only as PDFs — no
-    machine-readable source yet). DJI GEO
+    Every check queries the official CAA drone-map server live (limits, county zones, temporary
+    airspace). If offline, bundled layers give an estimate: CAA restricted airspace, official
+    airport/heliport polygons, and national park boundaries. DJI GEO
     zones are separate from the law: a DJI drone may refuse takeoff even where flying is legal —
     use the DJI link to check. Reference only — always confirm on the official CAA map
     (drone.caa.gov.tw) before flying. Default legal ceiling: 400 ft AGL.
@@ -138,6 +137,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="zones.js"></script>
 <script src="parks.js"></script>
+<script src="airports.js"></script>
 <script src="parser.js"></script>
 <script>
   var map = L.map("map").setView([25.0330, 121.5654], 10); // default: Taipei
@@ -150,9 +150,6 @@
   var current = null;
 
   // --- Zone layers ---
-  var AIRPORT_RED_KM = 5;    // approximate: the law defines per-airport polygons
-  var AIRPORT_YELLOW_KM = 10;
-
   L.geoJSON(window.CAA_ZONES, {
     style: { color: "#c0392b", weight: 1.5, fillColor: "#c0392b", fillOpacity: 0.18 },
     onEachFeature: function (f, layer) { layer.bindPopup("限航區 " + f.properties.name); }
@@ -163,12 +160,14 @@
     onEachFeature: function (f, layer) { layer.bindPopup(f.properties.name + " — 禁用無人機（需公園管理處許可）"); }
   }).addTo(map);
 
-  window.AIRPORTS.forEach(function (a) {
-    L.circle([a.lat, a.lng], {
-      radius: AIRPORT_RED_KM * 1000,
-      color: "#d68910", weight: 1, fillColor: "#d68910", fillOpacity: 0.12
-    }).addTo(map).bindPopup(a.name + " — approx. " + AIRPORT_RED_KM + " km airport zone");
-  });
+  L.geoJSON(window.AIRPORT_ZONES, {
+    style: function (f) {
+      return f.properties.kind === "airport_no_fly"
+        ? { color: "#d35400", weight: 1.5, fillColor: "#d35400", fillOpacity: 0.18 }
+        : { color: "#d4ac0d", weight: 1, fillColor: "#d4ac0d", fillOpacity: 0.12 };
+    },
+    onEachFeature: function (f, layer) { layer.bindPopup(f.properties.name); }
+  }).addTo(map);
 
   // --- Verdict helpers ---
   function pointInRing(lat, lng, ring) {
@@ -181,17 +180,26 @@
     return inside;
   }
 
-  function zoneHit(lat, lng, collection) {
-    var fs = collection.features;
-    for (var i = 0; i < fs.length; i++) {
-      var rings = fs[i].geometry.coordinates;
+  function polygonHit(lat, lng, geom) {
+    var polys = geom.type === "MultiPolygon" ? geom.coordinates : [geom.coordinates];
+    for (var p = 0; p < polys.length; p++) {
+      var rings = polys[p];
       if (pointInRing(lat, lng, rings[0])) {
         var inHole = false;
         for (var h = 1; h < rings.length; h++) {
           if (pointInRing(lat, lng, rings[h])) { inHole = true; break; }
         }
-        if (!inHole) return fs[i].properties.name;
+        if (!inHole) return true;
       }
+    }
+    return false;
+  }
+
+  function zoneHit(lat, lng, collection, kind) {
+    var fs = collection.features;
+    for (var i = 0; i < fs.length; i++) {
+      if (kind && fs[i].properties.kind !== kind) continue;
+      if (polygonHit(lat, lng, fs[i].geometry)) return fs[i].properties.name;
     }
     return null;
   }
@@ -220,41 +228,119 @@
     return lat >= 20 && lat <= 26.7 && lng >= 116 && lng <= 123.5;
   }
 
-  function renderVerdict(lat, lng) {
-    var el = document.getElementById("verdict");
+  function localVerdict(lat, lng) {
+    var confirmNote = '<div class="note">Bundled data (offline estimate) — county zones and NOTAMs need the live check.</div>';
     var zone = zoneHit(lat, lng, window.CAA_ZONES);
+    if (zone) return { cls: "verdict red", html: '<span class="big">🔴 Restricted airspace: ' + zone +
+      "</span><br>Inside a CAA 限航區 — no drone flight without CAA approval." + confirmNote };
+    var apRed = zoneHit(lat, lng, window.AIRPORT_ZONES, "airport_no_fly");
+    if (apRed) return { cls: "verdict red", html: '<span class="big">🔴 ' + apRed +
+      "</span><br>Inside an airport/heliport no-fly polygon (official boundary)." + confirmNote };
     var park = zoneHit(lat, lng, window.PARK_ZONES);
+    if (park) return { cls: "verdict red", html: '<span class="big">🔴 National park: ' + park +
+      "</span><br>Drones are banned in national parks without a permit from the park authority (國家公園法)." + confirmNote };
+    var apYellow = zoneHit(lat, lng, window.AIRPORT_ZONES, "airport_alt_200ft");
+    if (apYellow) return { cls: "verdict yellow", html: '<span class="big">🟡 ' + apYellow +
+      "</span><br>Flight above 200 ft AGL is prohibited here; lower flight may still need approval — verify." + confirmNote };
+    if (!inTaiwanArea(lat, lng)) return { cls: "verdict gray",
+      html: '<span class="big">⚪ Outside Taiwan</span><br>' +
+        "This tool's data covers Taiwan only — no verdict here. Use the DJI GEO link below and check local regulations." };
     var ap = nearestAirport(lat, lng);
-    var confirmNote = '<div class="note">Confirm on the official CAA map — county zones and NOTAMs are not bundled here.</div>';
-    if (zone) {
-      el.className = "verdict red";
-      el.innerHTML = '<span class="big">🔴 Restricted airspace: ' + zone + "</span><br>" +
-        "Inside a CAA 限航區 — no drone flight without CAA approval." + confirmNote;
-    } else if (park) {
-      el.className = "verdict red";
-      el.innerHTML = '<span class="big">🔴 National park: ' + park + "</span><br>" +
-        "Drones are banned in national parks without a permit from the park authority (國家公園法)." + confirmNote;
-    } else if (!inTaiwanArea(lat, lng)) {
-      el.className = "verdict gray";
-      el.innerHTML = '<span class="big">⚪ Outside Taiwan</span><br>' +
-        "This tool's data covers Taiwan only — no verdict here. Use the DJI GEO link below and check local regulations.";
-      return;
-    } else if (ap && ap.km <= AIRPORT_RED_KM) {
-      el.className = "verdict red";
-      el.innerHTML = '<span class="big">🔴 Airport vicinity</span><br>' +
-        ap.km.toFixed(1) + " km from " + ap.name +
-        " — inside the typical airport no-fly range (approximate circle)." + confirmNote;
-    } else if (ap && ap.km <= AIRPORT_YELLOW_KM) {
-      el.className = "verdict yellow";
-      el.innerHTML = '<span class="big">🟡 Near an airport</span><br>' +
-        ap.km.toFixed(1) + " km from " + ap.name +
-        " — may fall inside its published no-fly polygon; verify before flying." + confirmNote;
-    } else {
-      el.className = "verdict green";
-      el.innerHTML = '<span class="big">🟢 No hit in bundled layers</span><br>' +
-        "Not in a CAA restricted zone; nearest airport is " + ap.name + " (" +
-        ap.km.toFixed(1) + " km). Keep under 400 ft AGL." + confirmNote;
+    return { cls: "verdict green", html: '<span class="big">🟢 No hit in bundled layers</span><br>' +
+      "Not in a bundled restricted zone; nearest airport is " + ap.name + " (" +
+      ap.km.toFixed(1) + " km). Keep under 400 ft AGL." + confirmNote };
+  }
+
+  // --- Live check against the official CAA drone-map server ---
+  var GIS_BASE = "https://dronegis.caa.gov.tw/server/rest/services/Hosted/";
+  var verdictSeq = 0;
+
+  // JSONP: the server sends duplicate Access-Control-Allow-Origin headers,
+  // which browsers reject, so plain fetch/CORS is unusable.
+  var jsonpCounter = 0;
+  function queryLayer(path, lat, lng) {
+    return new Promise(function (resolve, reject) {
+      var cb = "gisCb" + (++jsonpCounter);
+      var script = document.createElement("script");
+      var timer = setTimeout(function () { cleanup(); reject(new Error("timeout")); }, 8000);
+      function cleanup() {
+        clearTimeout(timer);
+        delete window[cb];
+        if (script.parentNode) script.parentNode.removeChild(script);
+      }
+      window[cb] = function (d) {
+        cleanup();
+        if (d && !d.error) resolve(d.features || []);
+        else reject(new Error("server error"));
+      };
+      var params = new URLSearchParams({
+        geometry: JSON.stringify({ x: lng, y: lat, spatialReference: { wkid: 4326 } }),
+        geometryType: "esriGeometryPoint",
+        inSR: "4326",
+        spatialRel: "esriSpatialRelIntersects",
+        outFields: "空域名稱,空域類別名稱,空域顏色,有效日期起,有效日期迄",
+        returnGeometry: "false",
+        f: "json",
+        callback: cb
+      });
+      script.src = GIS_BASE + path + "/query?" + params;
+      script.onerror = function () { cleanup(); reject(new Error("network")); };
+      document.head.appendChild(script);
+    });
+  }
+
+  function officialCheck(lat, lng, seq) {
+    Promise.all([
+      queryLayer("UAV_fs_ryg/FeatureServer/0", lat, lng),
+      queryLayer("Temporary_Area/FeatureServer/19", lat, lng)
+    ]).then(function (res) {
+      if (seq !== verdictSeq) return;
+      renderOfficial(lat, lng, res[0], res[1]);
+    }).catch(function () {
+      if (seq !== verdictSeq) return;
+      var st = document.getElementById("officialStatus");
+      if (st) st.textContent = "Official CAA server unreachable — the offline estimate above is all we have. Confirm on drone.caa.gov.tw before flying.";
+    });
+  }
+
+  function renderOfficial(lat, lng, hits, tempHits) {
+    var el = document.getElementById("verdict");
+    var park = zoneHit(lat, lng, window.PARK_ZONES);
+    var lines = [], worst = 0; // 3 red, 2 yellow, 1 green
+    function add(f, temp) {
+      var a = f.attributes;
+      var rank = a["空域顏色"] === "紅區" ? 3 : a["空域顏色"] === "黃區" ? 2 : 1;
+      worst = Math.max(worst, rank);
+      var label = a["空域名稱"] || a["空域類別名稱"];
+      if (!label) return; // unnamed green background polygon
+      var icon = rank === 3 ? "🔴" : rank === 2 ? "🟡" : "🟢";
+      var dates = temp && a["有效日期起"] ? "（" + a["有效日期起"] + "〜" + (a["有效日期迄"] || "") + "）" : "";
+      lines.push(icon + " " + (temp ? "臨時空域: " : "") + label + dates);
     }
+    tempHits.forEach(function (f) { add(f, true); });
+    hits.forEach(function (f) { add(f, false); });
+    if (park) { worst = 3; lines.unshift("🔴 " + park + "（國家公園 — 需管理處許可）"); }
+
+    var head, cls;
+    if (worst === 3) { cls = "verdict red"; head = "🔴 Do not fly here"; }
+    else if (worst === 2) { cls = "verdict yellow"; head = "🟡 Restrictions apply"; }
+    else if (worst === 1) { cls = "verdict green"; head = "🟢 Green zone (official)"; }
+    else if (!inTaiwanArea(lat, lng)) { cls = "verdict gray"; head = "⚪ Outside Taiwan — no verdict"; }
+    else { cls = "verdict gray"; head = "⚪ No official zone data at this point"; }
+
+    el.className = cls;
+    el.innerHTML = '<span class="big">' + head + "</span>" +
+      (lines.length ? "<br>" + lines.join("<br>") : "") +
+      '<div class="note">Live result from the official CAA drone-map server (drone.caa.gov.tw data). Remember the default rules: under 400 ft AGL, visual line of sight, not over crowds.</div>';
+  }
+
+  function renderVerdict(lat, lng) {
+    var seq = ++verdictSeq;
+    var el = document.getElementById("verdict");
+    var local = localVerdict(lat, lng);
+    el.className = local.cls;
+    el.innerHTML = local.html + '<div class="note" id="officialStatus">⏳ Checking the official CAA server…</div>';
+    officialCheck(lat, lng, seq);
   }
 
   function showPoint(lat, lng, format) {
