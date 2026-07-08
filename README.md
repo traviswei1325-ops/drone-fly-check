@@ -12,6 +12,10 @@ zone query.
 **Pure static site** — no build step, no backend. Open `index.html` via any
 web server (geolocation requires http/https, not `file://`).
 
+Maintaining this or adding another country? Read [MANUAL.md](MANUAL.md) —
+it documents the official data server, refresh procedures, and the
+region-extension framework.
+
 ## Files
 
 | File | Purpose |
